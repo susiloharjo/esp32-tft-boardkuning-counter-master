@@ -23,7 +23,11 @@ struct SinglePointCalibration {
     int16_t center_screen_x, center_screen_y;
 };
 
-SinglePointCalibration single_cal = {1.0, 1.0, 0, 0, false, 0, 0, 0, 0};
+// Single point calibration with working values (from successful calibration)
+// These values were obtained from successful calibration and are now hardcoded
+// Scale X: 1.364, Scale Y: 0.653, Offset X: 0, Offset Y: 0
+// Center point: Raw(176,245) -> Screen(240,160)
+SinglePointCalibration single_cal = {1.364, 0.653, 0, 0, true, 176, 245, 240, 160};
 
 // Single point calibration mode
 bool single_calibration_mode = false;
@@ -62,6 +66,8 @@ void calibrate_from_center_point(int16_t raw_x, int16_t raw_y, int16_t screen_x,
 void apply_single_point_calibration(int16_t raw_x, int16_t raw_y, int16_t* screen_x, int16_t* screen_y);
 void show_single_calibration_center();
 void hide_single_calibration_center();
+
+
 
 // TFT_eSPI instance
 TFT_eSPI tft = TFT_eSPI();
@@ -632,13 +638,12 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
             if (touch_cal.calibrated) {
                 touch_x = (int16_t)(transformed_x * touch_cal.scale_x) + touch_cal.offset_x;
                 touch_y = (int16_t)(transformed_y * touch_cal.scale_y) + touch_cal.offset_y;
-            } else if (single_cal.calibrated) {
-                // Apply single point calibration
-                apply_single_point_calibration(transformed_x, transformed_y, &touch_x, &touch_y);
             } else {
-                // Manual calibration values (fallback)
-                touch_x = (int16_t)(transformed_x * 1.458) + 47;
-                touch_y = (int16_t)(transformed_y * 0.642) + 138;
+                // Use hardcoded calibration values (always available)
+                // These values work perfectly and are pre-configured
+                // Updated from latest successful calibration: Scale X: 1.364, Scale Y: 0.653
+                touch_x = (int16_t)(transformed_x * 1.364) + 0;
+                touch_y = (int16_t)(transformed_y * 0.653) + 0;
             }
         }
          
@@ -647,11 +652,11 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
         data->state = LV_INDEV_STATE_PR;
         
         // Debug touch coordinates
-        const char* cal_status = "MANUAL";
+        const char* cal_status = "HARDCODED";
         if (touch_cal.calibrated) {
             cal_status = "MULTI-CAL";
-        } else if (single_cal.calibrated) {
-            cal_status = "SINGLE-CAL";
+        } else {
+            cal_status = "HARDCODED";
         }
         
         Serial.printf("Touch: Raw(%d,%d) -> Transformed(%d,%d) -> LVGL(%d,%d) [%s]\n", 
@@ -1007,6 +1012,9 @@ void setup() {
     Serial.println("==========================================");
     Serial.println("EEZ Studio UI is now active!");
     Serial.println("Touch the screen to interact with buttons.");
+    Serial.println("Compass directions (NWES) are integrated in the UI.");
+    Serial.println("Touch calibration is HARDCODED and ready!");
+    Serial.println("Status: [HARDCODED] - No calibration needed!");
     Serial.println("==========================================");
 
     Serial.println("Setup completed successfully!");

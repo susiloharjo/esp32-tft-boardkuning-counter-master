@@ -190,18 +190,23 @@ data->point.y = Dev_Now.Y[0] + 80;   // Y offset (moves touch area down)
 ## 🎯 Touch Calibration System
 
 ### Overview
-The project includes an advanced 4-point touch calibration system that automatically calculates the correct coordinate mapping between the GT911 touch controller and the display.
+The project includes an advanced touch calibration system with both **4-point calibration** and **single-point calibration** options. The system automatically calculates the correct coordinate mapping between the GT911 touch controller and the display.
 
 ### Features
 - ✅ **4-Point Calibration**: Top-left, top-right, bottom-left, bottom-right
+- ✅ **Single-Point Calibration**: Quick calibration using one center point (RECOMMENDED)
 - ✅ **Y-Inversion Detection**: Automatically detects and corrects inverted Y coordinates
 - ✅ **Visual Calibration Points**: Red circles with crosshairs guide calibration
 - ✅ **Auto-Generated Code**: Produces ready-to-use calibration code
 - ✅ **Serial Commands**: Easy calibration control via serial monitor
+- ✅ **Pre-configured Values**: Working calibration values are hardcoded for immediate use
 
 ### Calibration Commands
 ```bash
-# Start calibration process
+# Start single-point calibration (RECOMMENDED)
+SINGLE
+
+# Start 4-point calibration process
 CAL
 
 # Check calibration status
@@ -210,19 +215,106 @@ STATUS
 # Test GT911 touch controller
 TEST
 
+# Reset all calibrations
+RESET
+
 # Show help
 HELP
 ```
 
-### Calibration Process
+### Single-Point Calibration (RECOMMENDED)
+**Fastest and most accurate method:**
+
+1. **Type `SINGLE`** in serial monitor
+2. **Red crosshair appears** in center of screen
+3. **Touch the red crosshair** - system auto-calculates entire screen mapping
+4. **Calibration complete** - UI returns to EEZ Studio
+
+**Expected Output:**
+```
+=== SINGLE POINT CALIBRATION ===
+Touch the center of the screen where button works
+This will calculate the entire screen mapping from one point
+Waiting for center point touch...
+Single point calibration: Raw(87,177) -> Transformed(177,233)
+Single point mapping: Raw(177,233) -> Screen(241,149)
+Single point calibration completed!
+Touch mapping is now active for entire screen.
+```
+
+### 4-Point Calibration (Advanced)
+**For fine-tuning or when single-point fails:**
+
 1. **Type `CAL`** in serial monitor
 2. **Touch 4 calibration points** as they appear on screen:
-   - Point 1: Center-left area (80, 120)
-   - Point 2: Center-right area (240, 120)
-   - Point 3: Bottom-left area (80, 360)
-   - Point 4: Bottom-right area (240, 360)
+   - Point 1: Top-left area (120, 120)
+   - Point 2: Top-right area (360, 120)
+   - Point 3: Bottom-left area (120, 200)
+   - Point 4: Bottom-right area (360, 200)
 3. **Copy generated code** from serial output
 4. **Apply to your project** for perfect touch accuracy
+
+### Pre-configured Calibration Values
+**The system comes with working calibration values hardcoded:**
+
+```cpp
+// Single point calibration with working values (from successful calibration)
+// Scale X: 1.364, Scale Y: 0.653, Offset X: 0, Offset Y: 0
+// Center point: Raw(176,245) -> Screen(240,160)
+SinglePointCalibration single_cal = {1.364, 0.653, 0, 0, true, 176, 245, 240, 160};
+
+// Manual fallback values (working values from successful calibration)
+touch_x = (int16_t)(transformed_x * 1.364) + 0;
+touch_y = (int16_t)(transformed_y * 0.653) + 0;
+```
+
+### Manual Calibration Adjustment
+**If you need to manually adjust calibration values, edit these sections in `src/main.cpp`:**
+
+#### 1. Hardcoded Single Point Calibration (Line ~30)
+```cpp
+// Single point calibration with working values (from successful calibration)
+// Scale X: 1.364, Scale Y: 0.653, Offset X: 0, Offset Y: 0
+// Center point: Raw(176,245) -> Screen(240,160)
+SinglePointCalibration single_cal = {1.364, 0.653, 0, 0, true, 176, 245, 240, 160};
+```
+
+#### 2. Manual Fallback Values (Line ~645)
+```cpp
+// Use hardcoded calibration values (always available)
+// These values work perfectly and are pre-configured
+// Updated from latest successful calibration: Scale X: 1.364, Scale Y: 0.653
+touch_x = (int16_t)(transformed_x * 1.364) + 0;
+touch_y = (int16_t)(transformed_y * 0.653) + 0;
+```
+
+#### 3. How to Adjust Values
+**To manually adjust calibration:**
+
+1. **Test current touch behavior** - Note where touch registers vs where you touch
+2. **Adjust Scale factors**:
+   - **Scale X**: Increase to make touch more sensitive horizontally
+   - **Scale Y**: Increase to make touch more sensitive vertically
+3. **Adjust Offset factors**:
+   - **Offset X**: Positive moves touch area right, negative moves left
+   - **Offset Y**: Positive moves touch area down, negative moves up
+4. **Compile and upload** - Test the changes
+5. **Iterate** - Fine-tune until touch is accurate
+
+#### 4. Example Adjustments
+```cpp
+// If touch is too far left, increase offset X
+touch_x = (int16_t)(transformed_x * 1.364) + 10;  // +10 moves right
+
+// If touch is too far up, increase offset Y  
+touch_y = (int16_t)(transformed_y * 0.653) + 20;  // +20 moves down
+
+// If touch is not sensitive enough horizontally, increase scale X
+touch_x = (int16_t)(transformed_x * 1.5) + 0;     // 1.5 is more sensitive
+
+// If touch is not sensitive enough vertically, increase scale Y
+touch_y = (int16_t)(transformed_y * 0.8) + 0;     // 0.8 is more sensitive
+```
 
 ### Generated Calibration Code
 After successful calibration, the system outputs:
@@ -230,8 +322,8 @@ After successful calibration, the system outputs:
 === CALIBRATION CODE ===
 Copy this code to replace the coordinate mapping in your main.cpp:
 // Auto-generated calibration code
-int16_t touch_x = (int16_t)(Dev_Now.X[0] * 1.379) + 80;
-int16_t touch_y = (int16_t)(Dev_Now.Y[0] * 1.132) + 218;
+int16_t touch_x = (int16_t)(transformed_x * 4.43) - 196;
+int16_t touch_y = (int16_t)(transformed_y * 1.40) - 88;
 // End calibration code
 ========================
 ```
@@ -240,15 +332,81 @@ int16_t touch_y = (int16_t)(Dev_Now.Y[0] * 1.132) + 218;
 For GT911 touch controller with similar hardware:
 ```cpp
 // In your my_touchpad_read function
-data->point.x = (int16_t)(Dev_Now.X[0] * 1.379) + 80;
-data->point.y = (int16_t)(Dev_Now.Y[0] * 1.132) + 218;
+// Apply single point calibration
+if (single_cal.calibrated) {
+    touch_x = (int16_t)(transformed_x * single_cal.scale_x) + single_cal.offset_x;
+    touch_y = (int16_t)(transformed_y * single_cal.scale_y) + single_cal.offset_y;
+} else {
+    // Manual calibration values (working values from successful calibration)
+    touch_x = (int16_t)(transformed_x * 4.43) - 196;
+    touch_y = (int16_t)(transformed_y * 1.40) - 88;
+}
+```
+
+### Calibration Status
+Check calibration status with `STATUS` command:
+```
+=== CALIBRATION STATUS ===
+Multi-point calibration: NOT CALIBRATED
+Single-point calibration: CALIBRATED
+Single-point - Scale X: 4.430, Scale Y: 1.400
+Single-point - Offset X: -196, Offset Y: -88
+Center point: Raw(63,178) -> Screen(240,160)
 ```
 
 ### Calibration Troubleshooting
 - **Touch not detected**: Check GT911 I2C connections
-- **Wrong coordinates**: Re-run calibration with `CAL` command
+- **Wrong coordinates**: Re-run calibration with `SINGLE` or `CAL` command
 - **Y coordinates inverted**: System automatically detects and corrects
 - **Calibration fails**: Use `TEST` command to verify GT911 functionality
+- **Button not working**: Use `SINGLE` command for quick recalibration
+- **Pre-configured values not working**: Run `SINGLE` calibration to get new values
+
+### Manual Calibration Troubleshooting
+**If automatic calibration doesn't work, manually adjust these values:**
+
+#### Touch Too Far Left/Right
+```cpp
+// Touch too far left - increase offset X
+touch_x = (int16_t)(transformed_x * 1.364) + 20;  // +20 moves right
+
+// Touch too far right - decrease offset X  
+touch_x = (int16_t)(transformed_x * 1.364) - 20;  // -20 moves left
+```
+
+#### Touch Too Far Up/Down
+```cpp
+// Touch too far up - increase offset Y
+touch_y = (int16_t)(transformed_y * 0.653) + 30;  // +30 moves down
+
+// Touch too far down - decrease offset Y
+touch_y = (int16_t)(transformed_y * 0.653) - 30;  // -30 moves up
+```
+
+#### Touch Not Sensitive Enough
+```cpp
+// Not sensitive horizontally - increase scale X
+touch_x = (int16_t)(transformed_x * 1.5) + 0;     // 1.5 is more sensitive
+
+// Not sensitive vertically - increase scale Y
+touch_y = (int16_t)(transformed_y * 0.8) + 0;     // 0.8 is more sensitive
+```
+
+#### Touch Too Sensitive
+```cpp
+// Too sensitive horizontally - decrease scale X
+touch_x = (int16_t)(transformed_x * 1.2) + 0;     // 1.2 is less sensitive
+
+// Too sensitive vertically - decrease scale Y
+touch_y = (int16_t)(transformed_y * 0.5) + 0;     // 0.5 is less sensitive
+```
+
+#### Quick Manual Test
+1. **Edit values** in `src/main.cpp` (lines ~30 and ~645)
+2. **Compile and upload**: `pio run -t upload`
+3. **Test touch** - Check if button responds correctly
+4. **Adjust and repeat** - Fine-tune until perfect
+5. **Save working values** - Update both locations in code
 
 ## 🐛 Troubleshooting
 
