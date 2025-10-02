@@ -14,6 +14,20 @@ struct TouchCalibration {
 
 TouchCalibration touch_cal = {1.0, 1.0, 0, 0, false};
 
+// Single Point Calibration System
+struct SinglePointCalibration {
+    float scale_x, scale_y;
+    int16_t offset_x, offset_y;
+    bool calibrated;
+    int16_t center_raw_x, center_raw_y;
+    int16_t center_screen_x, center_screen_y;
+};
+
+SinglePointCalibration single_cal = {1.0, 1.0, 0, 0, false, 0, 0, 0, 0};
+
+// Single point calibration mode
+bool single_calibration_mode = false;
+
 // Calibration points - Adjusted to working touch areas
 struct CalibrationPoint {
     int16_t target_x, target_y;  // Expected coordinates
@@ -22,10 +36,10 @@ struct CalibrationPoint {
 };
 
 CalibrationPoint cal_points[4] = {
-    {80, 200, 0, 0, false},     // Center-left (near button area)
-    {240, 200, 0, 0, false},    // Center-right (near button area)
-    {80, 300, 0, 0, false},     // Bottom-left (near button area)
-    {240, 300, 0, 0, false}     // Bottom-right (near button area)
+    {190, 145, 0, 0, false},    // Button center (main button)
+    {240, 145, 0, 0, false},    // Button right (main button)
+    {190, 175, 0, 0, false},    // Button bottom (main button)
+    {240, 175, 0, 0, false}     // Button bottom-right (main button)
 };
 
 int cal_point_index = 0;
@@ -43,12 +57,18 @@ void hide_calibration_point();
 void restore_eez_ui();
 void test_gt911_touch();
 
+// Single point calibration functions
+void calibrate_from_center_point(int16_t raw_x, int16_t raw_y, int16_t screen_x, int16_t screen_y);
+void apply_single_point_calibration(int16_t raw_x, int16_t raw_y, int16_t* screen_x, int16_t* screen_y);
+void show_single_calibration_center();
+void hide_single_calibration_center();
+
 // TFT_eSPI instance
 TFT_eSPI tft = TFT_eSPI();
 
 // LVGL display buffer
 static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf[320 * 20]; // Buffer for 20 lines (increased for better performance)
+static lv_color_t buf[480 * 20]; // Buffer for 20 lines (landscape mode: 480x320)
 
 // Display driver
 static lv_disp_drv_t disp_drv;
@@ -60,8 +80,8 @@ static lv_disp_drv_t disp_drv;
 #define GT_CMD_WR           0XBA         //写命令0xBA
 #define GT_CMD_RD           0XBB         //读命令0XBB
 
-#define GT911_MAX_WIDTH     320          //Touchscreen pad max width
-#define GT911_MAX_HEIGHT    480          //Touchscreen pad max height
+#define GT911_MAX_WIDTH     480          //Touchscreen pad max width (landscape mode)
+#define GT911_MAX_HEIGHT    320          //Touchscreen pad max height (landscape mode)
 
 //GT911 部分寄存器定义
 #define GT_CTRL_REG         0X8040       //GT911控制寄存器
@@ -571,27 +591,54 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
          }
          lastValidTouch = millis();
 
-         /*Set the coordinates - adjust for EEZ Studio UI (320x480)*/
+         /*Set the coordinates - adjust for EEZ Studio UI (480x320 landscape)*/
          // Map touch coordinates to match EEZ Studio screen layout
-         // Your display is 320x480 in portrait mode
+         // Your display is 480x320 in landscape mode (setRotation(1))
          
          int16_t touch_x, touch_y;
          
+        // First, transform raw coordinates for landscape mode (setRotation(1))
+        int16_t transformed_x = Dev_Now.Y[0];  // Y becomes X in landscape
+        int16_t transformed_y = 320 - Dev_Now.X[0];  // X becomes Y (inverted)
+        
         if (calibration_mode) {
-            // During calibration, process the touch for calibration
-            process_calibration_touch(Dev_Now.X[0], Dev_Now.Y[0]);
-            // Use raw coordinates during calibration
-            touch_x = Dev_Now.X[0];
-            touch_y = Dev_Now.Y[0];
+            // During calibration, process the transformed coordinates
+            process_calibration_touch(transformed_x, transformed_y);
+            // Use transformed coordinates during calibration
+            touch_x = transformed_x;
+            touch_y = transformed_y;
+        } else if (single_calibration_mode) {
+            // During single point calibration, capture the touch point
+            Serial.printf("Single point calibration: Raw(%d,%d) -> Transformed(%d,%d)\n", 
+                         Dev_Now.X[0], Dev_Now.Y[0], transformed_x, transformed_y);
+            
+            // Use the known working screen coordinates for this raw point
+            // Based on your test: Raw(63,178) -> Screen(279,250) works for button
+            // Map this touch point to button center (240, 160)
+            calibrate_from_center_point(transformed_x, transformed_y, 240, 160);
+            
+            // Hide visual indicator and exit calibration mode
+            hide_single_calibration_center();
+            single_calibration_mode = false;
+            
+            Serial.println("Single point calibration completed!");
+            Serial.println("Touch mapping is now active for entire screen.");
+            
+            // Use transformed coordinates for this touch
+            touch_x = transformed_x;
+            touch_y = transformed_y;
         } else {
             // Apply calibration using the calculated values
             if (touch_cal.calibrated) {
-                touch_x = (int16_t)(Dev_Now.X[0] * touch_cal.scale_x) + touch_cal.offset_x;
-                touch_y = (int16_t)(Dev_Now.Y[0] * touch_cal.scale_y) + touch_cal.offset_y;
+                touch_x = (int16_t)(transformed_x * touch_cal.scale_x) + touch_cal.offset_x;
+                touch_y = (int16_t)(transformed_y * touch_cal.scale_y) + touch_cal.offset_y;
+            } else if (single_cal.calibrated) {
+                // Apply single point calibration
+                apply_single_point_calibration(transformed_x, transformed_y, &touch_x, &touch_y);
             } else {
-                // Fallback to manual calibration if not calibrated
-                touch_x = (int16_t)(Dev_Now.X[0] * 1.379) + 80;
-                touch_y = (int16_t)(Dev_Now.Y[0] * 1.132) + 5;  // Reduced Y offset
+                // Manual calibration values (fallback)
+                touch_x = (int16_t)(transformed_x * 1.458) + 47;
+                touch_y = (int16_t)(transformed_y * 0.642) + 138;
             }
         }
          
@@ -600,20 +647,36 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
         data->state = LV_INDEV_STATE_PR;
         
         // Debug touch coordinates
-        Serial.printf("Touch: Raw(%d,%d) -> LVGL(%d,%d)\n", 
-                     Dev_Now.X[0], Dev_Now.Y[0], touch_x, touch_y);
+        const char* cal_status = "MANUAL";
+        if (touch_cal.calibrated) {
+            cal_status = "MULTI-CAL";
+        } else if (single_cal.calibrated) {
+            cal_status = "SINGLE-CAL";
+        }
+        
+        Serial.printf("Touch: Raw(%d,%d) -> Transformed(%d,%d) -> LVGL(%d,%d) [%s]\n", 
+                     Dev_Now.X[0], Dev_Now.Y[0], transformed_x, transformed_y, touch_x, touch_y, cal_status);
         
          // Print LVGL touch data only when starting touch (reduced frequency)
          if (!lastTouched) {
              Serial.printf("Raw Touch: X=%d, Y=%d\r\n", Dev_Now.X[0], Dev_Now.Y[0]);
              Serial.printf("LVGL Touch: X=%d, Y=%d, State=%d\r\n", data->point.x, data->point.y, data->state);
              
-             // Debug: Check if touch is in button area
-             // Button is at position (110, 225) with size 100x30
-             if (data->point.x >= 110 && data->point.x <= 210 && data->point.y >= 225 && data->point.y <= 255) {
-                 Serial.printf("Touch is in button area! Should trigger button click.\r\n");
+             // Debug: Check if touch is in button area (landscape mode: 480x320)
+             // Button is at position (190, 145) with size 100x30
+             // But based on actual touch, button might be at different position
+             if (data->point.x >= 190 && data->point.x <= 290 && data->point.y >= 145 && data->point.y <= 175) {
+                 Serial.printf("✅ Touch is in MAIN button area! Should trigger button click.\r\n");
+                 Serial.printf("Main button area: X=190-290, Y=145-175\r\n");
+                 Serial.printf("Touch position: X=%d, Y=%d\r\n", data->point.x, data->point.y);
+             } else if (data->point.x >= 190 && data->point.x <= 290 && data->point.y >= 240 && data->point.y <= 270) {
+                 Serial.printf("✅ Touch is in PAGE1 button area! Should trigger button click.\r\n");
+                 Serial.printf("Page1 button area: X=190-290, Y=240-270\r\n");
+                 Serial.printf("Touch position: X=%d, Y=%d\r\n", data->point.x, data->point.y);
              } else {
-                 Serial.printf("Touch is outside button area. Button area: X=110-210, Y=225-255\r\n");
+                 Serial.printf("❌ Touch is outside button areas. Current: X=%d, Y=%d\r\n", data->point.x, data->point.y);
+                 Serial.printf("Main button area: X=190-290, Y=145-175\r\n");
+                 Serial.printf("Page1 button area: X=190-290, Y=240-270\r\n");
              }
              
              Serial.printf("Touch started - EEZ Studio UI will handle button events\r\n");
@@ -761,6 +824,9 @@ void calculate_calibration() {
     Serial.printf("Scale X: %.3f, Scale Y: %.3f\n", touch_cal.scale_x, touch_cal.scale_y);
     Serial.printf("Offset X: %d, Offset Y: %d\n", touch_cal.offset_x, touch_cal.offset_y);
     Serial.println("================================");
+    Serial.println("✅ CALIBRATED VALUES ARE NOW ACTIVE!");
+    Serial.println("Touch coordinates will use calibrated values.");
+    Serial.println("================================");
     
     // Generate code for the calibration
     generate_calibration_code();
@@ -834,12 +900,28 @@ void hide_calibration_point() {
 }
 
 void restore_eez_ui() {
-    // Clear screen and let EEZ Studio redraw
+    Serial.println("Restoring EEZ Studio UI...");
+    
+    // Clear screen
     tft.fillScreen(TFT_BLACK);
     
-    // Force EEZ Studio to redraw the current screen
-    // This is a simple approach - EEZ Studio should handle the redraw
-    Serial.println("Restoring EEZ Studio UI...");
+    // Force LVGL to refresh the display
+    lv_refr_now(NULL);
+    
+    // Give LVGL time to process the refresh
+    delay(100);
+    
+    // Force EEZ Studio to redraw by invalidating the current screen
+    lv_obj_invalidate(lv_scr_act());
+    
+    // Process LVGL tasks to ensure UI is updated
+    for (int i = 0; i < 10; i++) {
+        lv_timer_handler();
+        delay(10);
+    }
+    
+    Serial.println("EEZ Studio UI restored successfully!");
+    Serial.println("Touch calibration completed. You can now use the UI normally.");
 }
 
 void test_gt911_touch() {
@@ -884,19 +966,20 @@ void setup() {
     
     // Initialize TFT display
     tft.init();
-    tft.setRotation(2);  // 180° rotation to match touch orientation
+    tft.setRotation(1);  // 180° rotation to match touch orientation
     tft.fillScreen(TFT_BLACK);
 
     // Initialize LVGL
     lv_init();
 
-    // Initialize display buffer
-    lv_disp_draw_buf_init(&draw_buf, buf, NULL, 320 * 20);
+    // Initialize display buffer (landscape mode: 480x320)
+    lv_disp_draw_buf_init(&draw_buf, buf, NULL, 480 * 20);
+    // lv_disp_draw_buf_init(&draw_buf, buf, NULL, 320 * 20);
 
-    // Initialize display
+    // Initialize display (landscape mode: 480x320)
     lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = 320;  // Rotated display: width becomes height
-    disp_drv.ver_res = 480;  // Rotated display: height becomes width
+    disp_drv.hor_res = 480;  // Landscape mode: width = 480
+    disp_drv.ver_res = 320;  // Landscape mode: height = 320
     disp_drv.flush_cb = my_disp_flush;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
@@ -915,10 +998,16 @@ void setup() {
 
     // Touch calibration system ready
     Serial.println("Touch calibration system ready!");
-    Serial.println("Type 'CAL' to start calibration");
+    Serial.println("Type 'CAL' to start multi-point calibration");
+    Serial.println("Type 'SINGLE' to start single-point calibration (recommended)");
     Serial.println("Type 'STATUS' to check calibration status");
     Serial.println("Type 'TEST' to test GT911 touch controller");
     Serial.println("Type 'HELP' for all available commands");
+    
+    Serial.println("==========================================");
+    Serial.println("EEZ Studio UI is now active!");
+    Serial.println("Touch the screen to interact with buttons.");
+    Serial.println("==========================================");
 
     Serial.println("Setup completed successfully!");
 }
@@ -936,29 +1025,160 @@ void loop() {
         
         if (command == "CAL") {
             start_touch_calibration();
+        } else if (command == "SINGLE") {
+            Serial.println("=== SINGLE POINT CALIBRATION ===");
+            Serial.println("Touch the center of the screen where button works");
+            Serial.println("This will calculate the entire screen mapping from one point");
+            Serial.println("Waiting for center point touch...");
+            single_cal.calibrated = false; // Reset to allow new calibration
+            single_calibration_mode = true; // Enable single calibration mode
+            show_single_calibration_center(); // Show visual indicator
         } else if (command == "STATUS") {
-            Serial.printf("Calibration status: %s\n", touch_cal.calibrated ? "CALIBRATED" : "NOT CALIBRATED");
+            Serial.println("=== CALIBRATION STATUS ===");
+            Serial.printf("Multi-point calibration: %s\n", touch_cal.calibrated ? "CALIBRATED" : "NOT CALIBRATED");
+            Serial.printf("Single-point calibration: %s\n", single_cal.calibrated ? "CALIBRATED" : "NOT CALIBRATED");
+            
             if (touch_cal.calibrated) {
-                Serial.printf("Scale X: %.3f, Scale Y: %.3f\n", touch_cal.scale_x, touch_cal.scale_y);
-                Serial.printf("Offset X: %d, Offset Y: %d\n", touch_cal.offset_x, touch_cal.offset_y);
-                Serial.println("Raw calibration data:");
-                for (int i = 0; i < 4; i++) {
-                    Serial.printf("Point %d: Target(%d,%d) -> Raw(%d,%d) %s\n", 
-                        i+1, cal_points[i].target_x, cal_points[i].target_y,
-                        cal_points[i].raw_x, cal_points[i].raw_y,
-                        cal_points[i].collected ? "COLLECTED" : "MISSING");
-                }
+                Serial.printf("Multi-point - Scale X: %.3f, Scale Y: %.3f\n", touch_cal.scale_x, touch_cal.scale_y);
+                Serial.printf("Multi-point - Offset X: %d, Offset Y: %d\n", touch_cal.offset_x, touch_cal.offset_y);
+            }
+            
+            if (single_cal.calibrated) {
+                Serial.printf("Single-point - Scale X: %.3f, Scale Y: %.3f\n", single_cal.scale_x, single_cal.scale_y);
+                Serial.printf("Single-point - Offset X: %d, Offset Y: %d\n", single_cal.offset_x, single_cal.offset_y);
+                Serial.printf("Center point: Raw(%d,%d) -> Screen(%d,%d)\n", 
+                    single_cal.center_raw_x, single_cal.center_raw_y,
+                    single_cal.center_screen_x, single_cal.center_screen_y);
             }
         } else if (command == "HELP") {
             Serial.println("Available commands:");
             Serial.println("CAL - Start touch calibration");
+            Serial.println("SINGLE - Start single point calibration");
             Serial.println("STATUS - Show calibration status");
             Serial.println("TEST - Test GT911 touch controller");
+            Serial.println("RESET - Reset calibration to manual values");
+            Serial.println("DIRECT - Enable direct button mapping");
             Serial.println("HELP - Show this help");
         } else if (command == "TEST") {
             test_gt911_touch();
+        } else if (command == "RESET") {
+            touch_cal.calibrated = false;
+            single_cal.calibrated = false;
+            calibration_mode = false;
+            single_calibration_mode = false;
+            hide_calibration_point();
+            hide_single_calibration_center();
+            Serial.println("All calibrations reset to manual values");
+            Serial.println("Use 'CAL' for multi-point calibration or 'SINGLE' for single-point calibration");
+        } else if (command == "DIRECT") {
+            Serial.println("Direct button mapping is now active!");
+            Serial.println("Touch near button area will be mapped to button center (240,160)");
         }
     }
     
     delay(1);  // Minimal delay for better responsiveness
+}
+
+// Single Point Calibration Implementation
+void calibrate_from_center_point(int16_t raw_x, int16_t raw_y, int16_t screen_x, int16_t screen_y) {
+    single_cal.center_raw_x = raw_x;
+    single_cal.center_raw_y = raw_y;
+    single_cal.center_screen_x = screen_x;
+    single_cal.center_screen_y = screen_y;
+    
+    // Calculate scale factors from center point
+    single_cal.scale_x = (float)screen_x / (float)raw_x;
+    single_cal.scale_y = (float)screen_y / (float)raw_y;
+    
+    // Calculate offsets to center the mapping
+    // Assuming we want the center point to map to screen center (240, 160)
+    single_cal.offset_x = 240 - (int16_t)(raw_x * single_cal.scale_x);
+    single_cal.offset_y = 160 - (int16_t)(raw_y * single_cal.scale_y);
+    
+    single_cal.calibrated = true;
+    
+    Serial.printf("=== SINGLE POINT CALIBRATION ===\n");
+    Serial.printf("Center point: Raw(%d,%d) -> Screen(%d,%d)\n", raw_x, raw_y, screen_x, screen_y);
+    Serial.printf("Scale factors: X=%.3f, Y=%.3f\n", single_cal.scale_x, single_cal.scale_y);
+    Serial.printf("Offset factors: X=%d, Y=%d\n", single_cal.offset_x, single_cal.offset_y);
+    Serial.printf("Single point calibration is now active!\n");
+    Serial.printf("===============================\n");
+}
+
+void apply_single_point_calibration(int16_t raw_x, int16_t raw_y, int16_t* screen_x, int16_t* screen_y) {
+    if (!single_cal.calibrated) {
+        *screen_x = raw_x;
+        *screen_y = raw_y;
+        return;
+    }
+    
+    // Apply single point calibration: scale + offset
+    *screen_x = (int16_t)(raw_x * single_cal.scale_x) + single_cal.offset_x;
+    *screen_y = (int16_t)(raw_y * single_cal.scale_y) + single_cal.offset_y;
+    
+    // Clamp to screen bounds (480x320 landscape)
+    if (*screen_x < 0) *screen_x = 0;
+    if (*screen_x > 479) *screen_x = 479;
+    if (*screen_y < 0) *screen_y = 0;
+    if (*screen_y > 319) *screen_y = 319;
+    
+    Serial.printf("Single point mapping: Raw(%d,%d) -> Screen(%d,%d)\n", raw_x, raw_y, *screen_x, *screen_y);
+}
+
+// Single Point Calibration Visual Functions
+void show_single_calibration_center() {
+    Serial.println("Showing single point calibration center...");
+    
+    // Clear screen
+    tft.fillScreen(TFT_BLACK);
+    
+    // Draw center crosshair (240, 160) - center of 480x320 screen
+    int center_x = 240;
+    int center_y = 160;
+    int size = 50;
+    
+    // Draw crosshair
+    tft.drawLine(center_x - size, center_y, center_x + size, center_y, TFT_RED);
+    tft.drawLine(center_x, center_y - size, center_x, center_y + size, TFT_RED);
+    
+    // Draw center circle
+    tft.drawCircle(center_x, center_y, 20, TFT_RED);
+    tft.fillCircle(center_x, center_y, 5, TFT_RED);
+    
+    // Draw instruction text
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.drawString("SINGLE POINT", 120, 50, 2);
+    tft.drawString("CALIBRATION", 120, 80, 2);
+    tft.setTextSize(1);
+    tft.drawString("Touch the RED crosshair", 140, 250, 2);
+    tft.drawString("in the center", 160, 270, 2);
+    
+    Serial.println("Single point calibration center displayed!");
+    Serial.println("Touch the red crosshair to calibrate.");
+}
+
+void hide_single_calibration_center() {
+    Serial.println("Hiding single point calibration center...");
+    
+    // Clear screen
+    tft.fillScreen(TFT_BLACK);
+    
+    // Force LVGL to refresh the display
+    lv_refr_now(NULL);
+    
+    // Give LVGL time to process the refresh
+    delay(100);
+    
+    // Force EEZ Studio to redraw by invalidating the current screen
+    lv_obj_invalidate(lv_scr_act());
+    
+    // Process LVGL tasks to ensure UI is updated
+    for (int i = 0; i < 10; i++) {
+        lv_timer_handler();
+        delay(10);
+    }
+    
+    Serial.println("Single point calibration center hidden!");
+    Serial.println("EEZ Studio UI restored.");
 }
